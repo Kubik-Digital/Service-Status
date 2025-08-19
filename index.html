@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KUBIK Infrastructure Status</title>
+  <link rel="dns-prefetch" href="https://www.githubstatus.com">
+  <link rel="preconnect" href="https://www.githubstatus.com" crossorigin>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial; background: #f5f7fb; color: #1f2437; padding: 20px; }
+    .container { max-width: 960px; margin: 0 auto; }
+    header.hero { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+    h1 { margin: 0; font-size: 24px; }
+    .subtitle { width: 100%; margin: 4px 0 0 0; color: #616a82; font-size: 14px; }
+    .controls { display: flex; align-items: center; gap: 10px; }
+    .badge { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 999px; border: 1px solid #e2e6ef; background: #ffffff; font-weight: 600; }
+    .badge .dot { width: 10px; height: 10px; border-radius: 999px; background: #9aa3b2; }
+    .dot-success { background: #198754; }
+    .dot-warn { background: #b26b00; }
+    .dot-danger { background: #c03630; }
+    .dot-unknown { background: #9aa3b2; }
+    button.refresh { appearance: none; border: 1px solid #e2e6ef; background: #ffffff; padding: 8px 12px; border-radius: 10px; font-weight: 600; cursor: pointer; }
+    button.refresh[disabled] { opacity: 0.6; cursor: not-allowed; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-top: 12px; }
+    .card { background: #ffffff; border: 1px solid #e2e6ef; border-radius: 12px; padding: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+    .card h3 { margin: 0 0 8px 0; font-size: 18px; }
+    .status-line { margin: 8px 0 10px 0; font-weight: 600; }
+    .service-line { display: flex; align-items: center; gap: 8px; margin: 6px 0; color: #616a82; }
+    .service-name { font-weight: 600; color: inherit; }
+    .pill { display: inline-block; padding: 4px 8px; border-radius: 999px; border: 1px solid #e2e6ef; background: #ffffff; }
+    .pill.success { color: #198754; }
+    .pill.warn { color: #b26b00; }
+    .pill.danger { color: #c03630; }
+    .pill.unknown { color: #6b7280; }
+    .last-updated { text-align: center; margin-top: 14px; font-size: 12px; color: #616a82; }
+    .error { background: #fff2f2; border: 1px solid #ffd0d0; color: #661f1f; padding: 10px 12px; border-radius: 10px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="hero">
+      <div class="title-wrap">
+        <div class="logo" aria-hidden="true"></div>
+        <div>
+          <h1>Κατάσταση Υποδομής KUBIK</h1>
+          <p class="subtitle">Όλα τα προγράμματα της KUBIK Digital φιλοξενούνται στις υποδομές των GitHub, Microsoft Azure και Google Cloud.</p>
+          <p class="subtitle">Live κατάσταση των υποδομών</p>
+          <p class="subtitle">Ανανεώνεται κάθε λεπτό.</p>
+        </div>
+      </div>
+      <div class="controls" style="padding-top: 20px;">
+        <div class="badge" id="global-badge" aria-live="polite">
+          <span class="dot dot-unknown"></span>
+          <span id="global-text">Checking status…</span>
+        </div>
+        <button class="refresh" id="refresh-btn" type="button">↻ Refresh</button>
+      </div>
+    </header>
+
+    <div id="error" class="error" style="display:none" role="alert"></div>
+
+    <main class="grid" id="status-container" aria-live="polite" aria-busy="true"></main>
+    <div class="last-updated" id="last-updated">Τελευταία Ενημέρωση: —</div>
+  </div>
+
+  <script>
+    // Projects and their dependent GitHub services
+    const projects = [
+      { name: "ERP Bridge", services: ["api", "actions"] },
+      { name: "Static Websites", services: ["pages"] },
+      { name: "Automations", services: ["actions", "api"] }
+    ];
+
+    // Map short keys to GitHub status component names
+    const serviceMap = {
+      api: "API Requests",
+      pages: "Pages",
+      actions: "Actions"
+    };
+
+    // Display mapping
+    const statusDisplayMap = {
+      operational: { text: "Operational", icon: "✅", class: "success" },
+      degraded_performance: { text: "Degraded", icon: "⚠️", class: "warn" },
+      partial_outage: { text: "Partial outage", icon: "⚠️", class: "warn" },
+      major_outage: { text: "Major outage", icon: "❌", class: "danger" },
+      unknown: { text: "Unknown", icon: "❓", class: "unknown" }
+    };
+
+    const containerEl = document.getElementById("status-container");
+    const updatedEl = document.getElementById("last-updated");
+    const errorEl = document.getElementById("error");
+    const refreshBtn = document.getElementById("refresh-btn");
+    const globalBadge = document.getElementById("global-badge");
+    const globalText = document.getElementById("global-text");
+
+    function setGlobalBadge(state) {
+      const dot = globalBadge.querySelector(".dot");
+      dot.className = "dot " + (state === "success" ? "dot-success" : state === "warn" ? "dot-warn" : state === "danger" ? "dot-danger" : "dot-unknown");
+    }
+
+    function showLoading() {
+      containerEl.setAttribute("aria-busy", "true");
+      containerEl.textContent = "Loading…";
+    }
+
+    async function fetchGitHubStatus() {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      try {
+        const res = await fetch("https://www.githubstatus.com/api/v2/summary.json", { signal: controller.signal, cache: "no-store" });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        if (!data || !Array.isArray(data.components)) throw new Error("Malformed response");
+        const components = {};
+        for (const c of data.components) components[c.name] = c.status;
+        return { components, indicator: data.status?.indicator || "unknown" };
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
+    function getProjectStatus(project, components) {
+      const details = project.services.map(key => {
+        const candidates = key === "pages" ? ["Pages", "GitHub Pages"]
+                          : key === "actions" ? ["Actions", "GitHub Actions"]
+                          : [serviceMap[key]];
+        const name = candidates.find(n => Object.prototype.hasOwnProperty.call(components, n)) || candidates[0];
+        const status = components[name] || "unknown";
+        return { service: name, status };
+      });
+      const isUp = details.every(d => d.status === "operational");
+      return { isUp, details };
+    }
+
+    function renderCards(components) {
+      containerEl.innerHTML = "";
+      for (const project of projects) {
+        const { isUp, details } = getProjectStatus(project, components);
+        const stateClass = isUp ? "success" : details.some(d => d.status === "major_outage") ? "danger" : "warn";
+        const statusText = isUp ? "Operational" : "Issues detected";
+        const statusIcon = isUp ? "✅" : details.some(d => d.status === "major_outage") ? "❌" : "⚠️";
+
+        const card = document.createElement("div");
+        card.className = "card";
+
+        // If project fully operational, don't render sub-services
+        if (isUp) {
+          card.innerHTML = `
+            <h3>${project.name}</h3>
+            <div class="status-line"><span class="pill ${stateClass}">${statusIcon} ${statusText}</span></div>
+          `;
+        } else {
+          card.innerHTML = `
+            <h3>${project.name}</h3>
+            <div class="status-line"><span class="pill ${stateClass}">${statusIcon} ${statusText}</span></div>
+            ${details.map(d => {
+              const disp = statusDisplayMap[d.status] || statusDisplayMap.unknown;
+              return `<div class="service-line"><span class="pill ${disp.class}">${disp.icon} ${d.service}</span><span style="margin-left:auto;color:inherit;opacity:.9;">${disp.text}</span></div>`;
+            }).join("")}
+          `;
+    }
+
+    containerEl.appendChild(card);
+  }
+  containerEl.setAttribute("aria-busy", "false");
+}
+
+
+    function setUpdatedNow() {
+      const now = new Date();
+      updatedEl.textContent = "Τελευταία Ενημέρωση: " + now.toLocaleString();
+    }
+
+    let refreshing = false;
+    async function buildStatus() {
+      if (refreshing) return;
+      try {
+        refreshing = true;
+        refreshBtn.setAttribute("disabled", "true");
+        errorEl.style.display = "none";
+        errorEl.textContent = "";
+        setGlobalBadge("unknown");
+        globalText.textContent = "Checking status…";
+        showLoading();
+
+        const { components, indicator } = await fetchGitHubStatus();
+        renderCards(components);
+        const globalState = indicator === "none" ? "success" : (indicator === "major" || indicator === "critical") ? "danger" : (indicator === "minor" || indicator === "warning") ? "warn" : "unknown";
+        setGlobalBadge(globalState);
+        globalText.textContent = globalState === "success" ? "All systems operational" : globalState === "danger" ? "Major incidents" : globalState === "warn" ? "Degraded performance" : "Status unknown";
+        setUpdatedNow();
+      } catch (err) {
+        containerEl.innerHTML = "";
+        errorEl.textContent = "Failed to load status. " + (err?.message || "Please try again.");
+        errorEl.style.display = "block";
+        setGlobalBadge("danger");
+        globalText.textContent = "Unable to fetch";
+      } finally {
+        refreshBtn.removeAttribute("disabled");
+        refreshing = false;
+      }
+    }
+
+    refreshBtn.addEventListener("click", () => buildStatus());
+    window.addEventListener("offline", () => { errorEl.textContent = "You are offline. Data may be outdated."; errorEl.style.display = "block"; });
+    window.addEventListener("online", () => { errorEl.style.display = "none"; });
+
+    // Initial load and periodic refresh
+    buildStatus();
+    setInterval(buildStatus, 60000);
+  </script>
+</body>
+</html>
