@@ -5,7 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>KUBIK Infrastructure Status</title>
   <link rel="dns-prefetch" href="https://www.githubstatus.com">
+  <link rel="dns-prefetch" href="https://status.cloud.google.com">
+  <link rel="dns-prefetch" href="https://azure.status.microsoft.com">
   <link rel="preconnect" href="https://www.githubstatus.com" crossorigin>
+  <link rel="preconnect" href="https://status.cloud.google.com" crossorigin>
+  <link rel="preconnect" href="https://azure.status.microsoft.com" crossorigin>
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial; background: #f5f7fb; color: #1f2437; padding: 20px; }
@@ -22,18 +26,28 @@
     .dot-unknown { background: #9aa3b2; }
     button.refresh { appearance: none; border: 1px solid #e2e6ef; background: #ffffff; padding: 8px 12px; border-radius: 10px; font-weight: 600; cursor: pointer; }
     button.refresh[disabled] { opacity: 0.6; cursor: not-allowed; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-top: 12px; }
+    .grid { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
     .card { background: #ffffff; border: 1px solid #e2e6ef; border-radius: 12px; padding: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
     .card h3 { margin: 0 0 8px 0; font-size: 18px; }
-    .status-line { margin: 8px 0 10px 0; font-weight: 600; }
-    .service-line { display: flex; align-items: center; gap: 8px; margin: 6px 0; color: #616a82; }
-    .service-name { font-weight: 600; color: inherit; }
+    .card h3 a { color: inherit; text-decoration: none; }
+    .card h3 a:hover { text-decoration: underline; }
+    .project-container { padding: 10px 0; border-bottom: 1px solid #f0f2f5; }
+    .project-container:last-of-type { border-bottom: none; padding-bottom: 0; }
+    .project-container:first-of-type { padding-top: 4px; }
+    .project-line { display: flex; align-items: center; }
+    .project-name { font-weight: 600; }
+    .service-details { background: #f9fafc; padding: 8px 12px; margin-top: 10px; border-radius: 6px; font-size: 12px; color: #616a82; }
+    .service-line-small { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+    .dot-small { width: 8px; height: 8px; border-radius: 999px; flex-shrink: 0; }
     .pill { display: inline-block; padding: 4px 8px; border-radius: 999px; border: 1px solid #e2e6ef; background: #ffffff; }
     .pill.success { color: #198754; }
     .pill.warn { color: #b26b00; }
     .pill.danger { color: #c03630; }
     .pill.unknown { color: #6b7280; }
     .last-updated { text-align: center; margin-top: 14px; font-size: 12px; color: #616a82; }
+    .copyright { text-align: center; margin-top: 8px; font-size: 12px; color: #616a82; }
+    .copyright a { color: #1f2437; text-decoration: none; font-weight: 600; }
+    .copyright a:hover { text-decoration: underline; }
     .error { background: #fff2f2; border: 1px solid #ffd0d0; color: #661f1f; padding: 10px 12px; border-radius: 10px; margin-top: 8px; }
   </style>
 </head>
@@ -62,21 +76,55 @@
 
     <main class="grid" id="status-container" aria-live="polite" aria-busy="true"></main>
     <div class="last-updated" id="last-updated">Τελευταία Ενημέρωση: —</div>
+    <footer class="copyright">
+      &copy; <span id="copyright-year"></span> | <a href="https://kubik.gr" target="_blank" rel="noopener noreferrer">KUBIK</a>
+    </footer>
   </div>
 
   <script>
-    // Projects and their dependent GitHub services
-    const projects = [
-      { name: "ERP Bridge", services: ["api", "actions"] },
-      { name: "Static Websites", services: ["pages"] },
-      { name: "Automations", services: ["actions", "api"] }
+    // Define the structure of the status page, grouped by provider
+    const providerGroups = [
+      {
+        name: "GitHub",
+        key: "github",
+        url: "https://www.githubstatus.com/",
+        projects: [
+          { name: "ERP Bridge", services: ["api", "actions"] },
+          { name: "Automations", services: ["actions", "api"] },
+          { name: "Static Websites", services: ["pages"] }
+        ]
+      },
+      {
+        name: "Microsoft Azure",
+        key: "azure",
+        url: "https://azure.status.microsoft.com/en-us/status/",
+        projects: [
+          { name: "Static Web Apps", services: ["static_web_apps"] }
+        ]
+      },
+      {
+        name: "Google Cloud",
+        key: "google",
+        url: "https://status.cloud.google.com/",
+        projects: [
+          { name: "Firebase", services: ["firebase"] }
+        ]
+      }
     ];
 
-    // Map short keys to GitHub status component names
+    // Map internal keys to human-readable service names
     const serviceMap = {
-      api: "API Requests",
-      pages: "Pages",
-      actions: "Actions"
+      github: {
+        api: "API Requests",
+        pages: "Pages",
+        actions: "Actions"
+      },
+      azure: {
+        static_web_apps: "Azure Static Web Apps"
+      },
+      google: {
+        firebase: "Firebase"
+      }
     };
 
     // Display mapping
@@ -121,52 +169,158 @@
       }
     }
 
-    function getProjectStatus(project, components) {
-      const details = project.services.map(key => {
-        const candidates = key === "pages" ? ["Pages", "GitHub Pages"]
-                          : key === "actions" ? ["Actions", "GitHub Actions"]
-                          : [serviceMap[key]];
-        const name = candidates.find(n => Object.prototype.hasOwnProperty.call(components, n)) || candidates[0];
-        const status = components[name] || "unknown";
+    async function fetchAzureStatus() {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      try {
+        // The Azure status endpoint can be difficult to access directly from a browser
+        // due to CORS (Cross-Origin Resource Sharing) policies. Using a public CORS
+        // proxy is a common workaround. The previous proxies are being blocked by Azure (HTTP 403),
+        // so we are trying one final alternative.
+        const proxyUrl = "https://cors.bridged.cc/";
+        const targetUrl = "https://azure.status.microsoft.com/en-us/status/data";
+        const res = await fetch(proxyUrl + targetUrl, {
+          signal: controller.signal,
+          cache: "no-store"
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (!data || !Array.isArray(data.services)) throw new Error("Malformed Azure response");
+
+        const components = {};
+        // Use .toLowerCase() and .includes() for a more resilient check against the service name.
+        const staticAppsSvc = data.services.find(s => s.name && s.name.toLowerCase().includes("static-web-apps"));
+        if (staticAppsSvc) {
+          const healthStates = staticAppsSvc.regions.map(r => r.health);
+          let worstHealth = "Good";
+          if (healthStates.includes("Error")) worstHealth = "Error";
+          else if (healthStates.includes("Warning")) worstHealth = "Warning";
+
+          const statusMap = { Good: "operational", Warning: "degraded_performance", Error: "major_outage" };
+          components["Azure Static Web Apps"] = statusMap[worstHealth] || "unknown";
+        } else {
+          // If not found, log the available service names for debugging, then mark as unknown.
+          console.warn("Could not find 'static-web-apps' service in Azure status. Marking as unknown. Available services:", data.services.map(s => s.name));
+          components["Azure Static Web Apps"] = "unknown";
+        }
+        
+        const overallIndicator = data.services.some(s => s.regions.some(r => r.health === "Error")) ? "major"
+                               : data.services.some(s => s.regions.some(r => r.health === "Warning")) ? "minor"
+                               : "none";
+
+        return { components, indicator: overallIndicator };
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
+    async function fetchGoogleStatus() {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      try {
+        const res = await fetch("https://status.cloud.google.com/incidents.json", { signal: controller.signal, cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const incidents = await res.json();
+        if (!Array.isArray(incidents)) throw new Error("Malformed Google response");
+
+        const components = {};
+        const firebaseIncident = incidents.find(i => i.service_name.includes("Firebase") && i.end === null);
+        
+        if (firebaseIncident) {
+            const severity = firebaseIncident.severity;
+            if (severity === "high") components["Firebase"] = "major_outage";
+            else if (severity === "medium") components["Firebase"] = "partial_outage";
+            else components["Firebase"] = "degraded_performance";
+        } else {
+            components["Firebase"] = "operational";
+        }
+
+        const hasHighImpact = incidents.some(i => i.end === null && i.severity === "high");
+        const hasMediumImpact = incidents.some(i => i.end === null && i.severity === "medium");
+        const hasLowImpact = incidents.some(i => i.end === null && i.severity === "low");
+
+        const indicator = hasHighImpact ? "major" : hasMediumImpact ? "minor" : hasLowImpact ? "minor" : "none";
+
+        return { components, indicator };
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
+    function getProjectStatus(project, providerKey, allComponents) {
+      const details = project.services.map(serviceKey => {
+        const serviceName = serviceMap[providerKey][serviceKey];
+        // Special handling for GitHub component name variations
+        const candidates = providerKey === 'github' && serviceKey === 'pages' ? ["Pages", "GitHub Pages"]
+                         : providerKey === 'github' && serviceKey === 'actions' ? ["Actions", "GitHub Actions"]
+                         : [serviceName];
+        const name = candidates.find(n => Object.prototype.hasOwnProperty.call(allComponents, n)) || candidates[0];
+        const status = allComponents[name] || "unknown";
         return { service: name, status };
       });
       const isUp = details.every(d => d.status === "operational");
       return { isUp, details };
     }
 
-    function renderCards(components) {
+    function renderGroupedCards(allComponents) {
       containerEl.innerHTML = "";
-      for (const project of projects) {
-        const { isUp, details } = getProjectStatus(project, components);
-        const stateClass = isUp ? "success" : details.some(d => d.status === "major_outage") ? "danger" : "warn";
-        const statusText = isUp ? "Operational" : "Issues detected";
-        const statusIcon = isUp ? "✅" : details.some(d => d.status === "major_outage") ? "❌" : "⚠️";
-
+      for (const group of providerGroups) {
         const card = document.createElement("div");
         card.className = "card";
+        const fetchError = allComponents[`${group.key}_error`];
 
-        // If project fully operational, don't render sub-services
-        if (isUp) {
-          card.innerHTML = `
-            <h3>${project.name}</h3>
-            <div class="status-line"><span class="pill ${stateClass}">${statusIcon} ${statusText}</span></div>
+        let cardBodyHTML = '';
+        if (fetchError) {
+          cardBodyHTML = `
+            <div class="project-container">
+              <div class="project-line">
+                <span class="project-name">Status Update Failed</span>
+                <span class="pill danger" style="margin-left: auto;">Error</span>
+              </div>
+              <div class="service-details">
+                Could not retrieve status: ${fetchError}
+              </div>
+            </div>
           `;
         } else {
-          card.innerHTML = `
-            <h3>${project.name}</h3>
-            <div class="status-line"><span class="pill ${stateClass}">${statusIcon} ${statusText}</span></div>
-            ${details.map(d => {
-              const disp = statusDisplayMap[d.status] || statusDisplayMap.unknown;
-              return `<div class="service-line"><span class="pill ${disp.class}">${disp.icon} ${d.service}</span><span style="margin-left:auto;color:inherit;opacity:.9;">${disp.text}</span></div>`;
-            }).join("")}
-          `;
+          let projectsHTML = '';
+          for (const project of group.projects) {
+            const { isUp, details } = getProjectStatus(project, group.key, allComponents);
+            const stateClass = isUp ? "success" : details.some(d => d.status === "major_outage") ? "danger" : "warn";
+            const statusText = isUp ? "Operational" : "Issues detected";
+            
+            let detailsHTML = '';
+            if (!isUp) {
+              detailsHTML = `<div class="service-details">
+                ${details.map(d => {
+                  const disp = statusDisplayMap[d.status] || statusDisplayMap.unknown;
+                  const dotClass = disp.class === 'success' ? 'dot-success' : disp.class === 'warn' ? 'dot-warn' : disp.class === 'danger' ? 'dot-danger' : 'dot-unknown';
+                  return `<div class="service-line-small"><span class="dot-small ${dotClass}"></span>${d.service}: ${disp.text}</div>`;
+                }).join("")}
+              </div>`;
+            }
+
+            projectsHTML += `
+              <div class="project-container">
+                <div class="project-line">
+                  <span class="project-name">${project.name}</span>
+                  <span class="pill ${stateClass}" style="margin-left: auto;">${statusText}</span>
+                </div>
+                ${detailsHTML}
+              </div>
+            `;
+          }
+          cardBodyHTML = projectsHTML;
+        }
+
+        card.innerHTML = `
+          <h3><a href="${group.url}" target="_blank" rel="noopener noreferrer" title="Visit ${group.name} status page">${group.name}</a></h3>
+          ${cardBodyHTML}
+        `;
+        containerEl.appendChild(card);
+      }
+      containerEl.setAttribute("aria-busy", "false");
     }
-
-    containerEl.appendChild(card);
-  }
-  containerEl.setAttribute("aria-busy", "false");
-}
-
 
     function setUpdatedNow() {
       const now = new Date();
@@ -185,11 +339,41 @@
         globalText.textContent = "Checking status…";
         showLoading();
 
-        const { components, indicator } = await fetchGitHubStatus();
-        renderCards(components);
-        const globalState = indicator === "none" ? "success" : (indicator === "major" || indicator === "critical") ? "danger" : (indicator === "minor" || indicator === "warning") ? "warn" : "unknown";
-        setGlobalBadge(globalState);
-        globalText.textContent = globalState === "success" ? "All systems operational" : globalState === "danger" ? "Major incidents" : globalState === "warn" ? "Degraded performance" : "Status unknown";
+        const [github, azure, google] = await Promise.allSettled([
+            fetchGitHubStatus(),
+            fetchAzureStatus(),
+            fetchGoogleStatus()
+        ]);
+
+        if (github.status === 'rejected') console.error("GitHub fetch failed:", github.reason);
+        if (azure.status === 'rejected') console.error("Azure fetch failed:", azure.reason);
+        if (google.status === 'rejected') console.error("Google fetch failed:", google.reason);
+
+        const allComponents = {};
+        const providerResults = { github, azure, google };
+        for (const key in providerResults) {
+            const result = providerResults[key];
+            if (result.status === 'rejected') {
+                allComponents[`${key}_error`] = result.reason.message || 'Fetch timed out or failed.';
+            } else if (result.value && result.value.components) {
+                Object.assign(allComponents, result.value.components);
+            }
+        }
+
+        renderGroupedCards(allComponents);
+
+        const indicators = [
+            github.value?.indicator,
+            azure.value?.indicator,
+            google.value?.indicator
+        ].filter(Boolean);
+
+        const worstIndicator = indicators.includes("major") || indicators.includes("critical") ? "danger"
+                             : indicators.includes("minor") || indicators.includes("warning") ? "warn"
+                             : indicators.every(i => i === "none") ? "success" : "unknown";
+
+        setGlobalBadge(worstIndicator);
+        globalText.textContent = worstIndicator === "success" ? "All systems operational" : worstIndicator === "danger" ? "Major incidents" : worstIndicator === "warn" ? "Degraded performance" : "Status unknown";
         setUpdatedNow();
       } catch (err) {
         containerEl.innerHTML = "";
@@ -210,6 +394,8 @@
     // Initial load and periodic refresh
     buildStatus();
     setInterval(buildStatus, 60000);
+
+    document.getElementById("copyright-year").textContent = new Date().getFullYear();
   </script>
 </body>
 </html>
